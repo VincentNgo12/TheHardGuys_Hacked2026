@@ -1,4 +1,3 @@
-#pragma once
 #include <Wire.h>
 #include "aht21_driver.h"
 #include <Adafruit_AHTX0.h>
