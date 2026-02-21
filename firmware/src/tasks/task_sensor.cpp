@@ -115,13 +115,17 @@ static void ens160Task(void *pvParameters) {
             xSemaphoreGive(g_i2cMutex);
 
             if (ok) {
-                bool isReady = (ens160.getStatus() == ENS160_STATUS_NORMAL);
-
                 if (xSemaphoreTake(g_dataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                     g_sensorData.eco2        = eco2;
                     g_sensorData.tvoc        = tvoc;
                     g_sensorData.aqi         = aqi;
-                    g_sensorData.ens160Ready = isReady;
+
+                    // Latch g_sensorData.ens160Ready to true once we get a real reading — never go back to false
+                    if (!g_sensorData.ens160Ready && eco2 > 0) {
+                        g_sensorData.ens160Ready = true;
+                        Serial.println("[ENS160] Warm-up complete, data is valid.");
+                    }
+
                     xSemaphoreGive(g_dataMutex);
                 }
             } else {
