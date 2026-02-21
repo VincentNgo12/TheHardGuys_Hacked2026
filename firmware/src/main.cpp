@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-#include "Adafruit_AHTX0"
+#include "aht21_driver.h"
 #include "ens160_driver.h"
 
 AHT21Driver aht21;
@@ -12,7 +12,7 @@ void setup() {
     delay(1000);
 
     Serial.println("Starting I2C...");
-    Wire.begin(21, 22);  // SDA, SCL for ESP32
+    Wire.begin(22, 20);  // ESP32 Feather V2: SDA=22, SCL=20
 
     Serial.println("Initializing AHT21...");
     if (!aht21.begin()) {

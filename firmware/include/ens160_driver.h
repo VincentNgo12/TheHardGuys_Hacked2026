@@ -7,5 +7,5 @@ public:
     bool read(uint16_t &eco2, uint16_t &tvoc, int8_t &aqi);
 
 private:
-    Adafruit_ENS160 ens;
+    ScioSense_ENS160 ens160;
 };
