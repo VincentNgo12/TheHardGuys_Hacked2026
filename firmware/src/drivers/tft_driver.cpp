@@ -44,31 +44,11 @@ void TFTDriver::drawSplash() {
 // ─────────────────────────────────────────────────────────
 //  HOME SCREEN
 // ─────────────────────────────────────────────────────────
-void TFTDriver::drawHomeScreen(const DisplayData &d, bool heartBeatTick) {
+void TFTDriver::drawHomeScreen_BG() {
     tft.fillScreen(COL_BG);
 
     // Status bar
     drawStatusBar();
-
-    // Time placeholder (RTC not implemented — shows uptime)
-    uint32_t s   = millis() / 1000;
-    uint8_t  hh  = (s / 3600) % 24;
-    uint8_t  mm  = (s / 60) % 60;
-    uint8_t  ss  = s % 60;
-
-    char timeBuf[6];
-    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", hh, mm);
-    tft.setTextColor(COL_TEXT);
-    tft.setTextSize(4);
-    tft.setCursor(8, 26);
-    tft.print(timeBuf);
-
-    char secBuf[3];
-    snprintf(secBuf, sizeof(secBuf), "%02d", ss);
-    tft.setTextColor(COL_ACCENT);
-    tft.setTextSize(2);
-    tft.setCursor(8, 74);
-    tft.print(secBuf);
 
     tft.setTextColor(COL_SUBTEXT);
     tft.setTextSize(1);
@@ -77,14 +57,38 @@ void TFTDriver::drawHomeScreen(const DisplayData &d, bool heartBeatTick) {
 
     tft.fillRect(8, 105, 140, 2, COL_ACCENT);
 
-    // Widgets
-    drawHeartWidget(d.heartRate, heartBeatTick);
-    drawEnvCard(d.eCO2, d.eTVOC, d.temperature, d.humidity, d.spo2);
-
     // Sidebar buttons
     drawAppButton(262,  30, 50, 50, COL_CARD, "~T",  "ENV");
     drawAppButton(262,  90, 50, 50, COL_CARD, "CO2", "AIR");
     drawAppButton(262, 150, 50, 50, COL_CARD, "HR",  "HEART");
+}
+
+void TFTDriver::updateHomeScreen(const DisplayData &d, bool heartBeatTick) {
+    // Time placeholder (RTC not implemented — shows uptime)
+    uint32_t s   = millis() / 1000;
+    uint8_t  hh  = (s / 3600) % 24;
+    uint8_t  mm  = (s / 60) % 60;
+    uint8_t  ss  = s % 60;
+
+    char timeBuf[6];
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", hh, mm);
+    tft.fillRect(8, 26, 120, 32, COL_BG); // Clear time area
+    tft.setTextColor(COL_TEXT);
+    tft.setTextSize(4);
+    tft.setCursor(8, 26);
+    tft.print(timeBuf);
+
+    char secBuf[3];
+    snprintf(secBuf, sizeof(secBuf), "%02d", ss);
+    tft.fillRect(8, 74, 30, 16, COL_BG); // Clear seconds area
+    tft.setTextColor(COL_ACCENT);
+    tft.setTextSize(2);
+    tft.setCursor(8, 74);
+    tft.print(secBuf);
+
+    // Widgets
+    drawHeartWidget(d.heartRate, heartBeatTick);
+    drawEnvCard(d.eCO2, d.eTVOC, d.temperature, d.humidity, d.spo2);
 
     // Compass (heading from accel as placeholder)
     drawCompassWidget(d.accelX * 10.0f);
@@ -93,7 +97,7 @@ void TFTDriver::drawHomeScreen(const DisplayData &d, bool heartBeatTick) {
 // ─────────────────────────────────────────────────────────
 //  ENV SCREEN
 // ─────────────────────────────────────────────────────────
-void TFTDriver::drawEnvScreen(const DisplayData &d) {
+void TFTDriver::drawEnvScreen_BG() {
     tft.fillScreen(COL_BG);
 
     // Header
@@ -106,6 +110,12 @@ void TFTDriver::drawEnvScreen(const DisplayData &d) {
     tft.setCursor(100, 7);
     tft.print("ENVIRONMENT  &  AIR QUALITY");
 
+    tft.setTextColor(COL_SUBTEXT); tft.setTextSize(1);
+    tft.setCursor(233, 200); tft.print("Send 'H'");
+    tft.setCursor(233, 210); tft.print("to return");
+}
+
+void TFTDriver::updateEnvScreen(const DisplayData &d) {
     // Gauges
     drawGaugeArc(58,  105, 50, -10, 50,   d.temperature,   COL_AMBER,  "TEMP", "C");
     drawGaugeArc(175, 105, 50,   0, 100,  d.humidity,      COL_ACCENT, "HUM",  "%");
@@ -118,16 +128,21 @@ void TFTDriver::drawEnvScreen(const DisplayData &d) {
 
     // Value overlays
     char buf[12];
+    tft.fillRect(34, 97, 50, 16, COL_BG); // Clear temp value
     tft.setTextColor(COL_TEXT); tft.setTextSize(2);
     snprintf(buf, sizeof(buf), "%.1f", d.temperature);
     tft.setCursor(34, 97); tft.print(buf);
+
+    tft.fillRect(152, 97, 40, 16, COL_BG); // Clear humidity value
     snprintf(buf, sizeof(buf), "%.0f", d.humidity);
     tft.setCursor(152, 97); tft.print(buf);
 
+    tft.fillRect(38, 197, 40, 8, COL_BG); // Clear co2 value
     tft.setTextColor(co2col);  tft.setTextSize(1);
     snprintf(buf, sizeof(buf), "%d", d.eCO2);
     tft.setCursor(38, 197); tft.print(buf);
 
+    tft.fillRect(154, 197, 40, 8, COL_BG); // Clear tvoc value
     tft.setTextColor(tvoccol);
     snprintf(buf, sizeof(buf), "%d", d.eTVOC);
     tft.setCursor(154, 197); tft.print(buf);
@@ -135,14 +150,11 @@ void TFTDriver::drawEnvScreen(const DisplayData &d) {
     // AQI badge
     const char *aqiLabel = (d.eCO2 < 800) ? "GOOD" : (d.eCO2 < 1500) ? "MOD." : "POOR";
     uint16_t aqiColor    = (d.eCO2 < 800) ? COL_GREEN : (d.eCO2 < 1500) ? COL_AMBER : COL_RED;
+    tft.fillRect(230, 80, 60, 30, COL_BG); // Clear AQI area
     tft.setTextColor(COL_SUBTEXT); tft.setTextSize(1);
     tft.setCursor(240, 80); tft.print("AQI");
     tft.setTextColor(aqiColor); tft.setTextSize(2);
     tft.setCursor(233, 95); tft.print(aqiLabel);
-
-    tft.setTextColor(COL_SUBTEXT); tft.setTextSize(1);
-    tft.setCursor(233, 200); tft.print("Send 'H'");
-    tft.setCursor(233, 210); tft.print("to return");
 }
 
 // ─────────────────────────────────────────────────────────

@@ -56,8 +56,10 @@ public:
 
     // ── Screens ───────────────────────────────────────────
     void drawSplash();
-    void drawHomeScreen(const DisplayData &d, bool heartBeatTick);
-    void drawEnvScreen (const DisplayData &d);
+    void drawHomeScreen_BG();
+    void updateHomeScreen(const DisplayData &d, bool heartBeatTick);
+    void drawEnvScreen_BG();
+    void updateEnvScreen (const DisplayData &d);
     void drawFallAlert (uint32_t fallAlertStart);
 
     // ── Helpers (public so task can use them if needed) ───

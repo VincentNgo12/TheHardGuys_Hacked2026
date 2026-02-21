@@ -1,5 +1,6 @@
 // src/tasks/task_display.cpp
 #include "task_display.h"
+#include "task_sensor.h"
 #include <Arduino.h>
 
 static TFTDriver tft;
@@ -9,14 +10,16 @@ static uint32_t  fallAlertStart   = 0;
 
 static void displayTask(void *pvParameters) {
     bool heartBeatTick = false;
+    bool forceRedraw = true;
 
     // Initial splash
     tft.drawSplash();
     vTaskDelay(pdMS_TO_TICKS(1500));
-    tft.clearScreen();
-
+    
     while (true) {
         // ── Copy sensor data under lock ───────────────────
+        // *** g_dataMutex is from task_sensor.h ***
+        // *** g_sensorData used to read sensors state is also from task_sensor.h ***
         DisplayData d = {};
         if (xSemaphoreTake(g_dataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
             d.temperature = g_sensorData.temperature;
@@ -39,41 +42,46 @@ static void displayTask(void *pvParameters) {
         if ((mag < 2.0f || mag > 25.0f) && !fallAlertActive) {
             fallAlertActive = true;
             fallAlertStart  = millis();
+            forceRedraw = true;
             Serial.println("[Display] Fall detected!");
         }
 
         // ── Serial screen switching ───────────────────────
         if (Serial.available()) {
             char c = Serial.read();
-            if (c == 'E' || c == 'e') {
+            if ((c == 'E' || c == 'e') && currentScreen != SCREEN_ENV) {
                 currentScreen = SCREEN_ENV;
-                tft.clearScreen();
-            } else if (c == 'H' || c == 'h') {
+                forceRedraw = true;
+            } else if ((c == 'H' || c == 'h') && currentScreen != SCREEN_HOME) {
                 currentScreen = SCREEN_HOME;
-                tft.clearScreen();
+                forceRedraw = true;
             } else if (c == 'F' || c == 'f') {
                 fallAlertActive = true;
                 fallAlertStart  = millis();
+                forceRedraw = true;
             }
         }
 
         // ── Draw ─────────────────────────────────────────
         if (fallAlertActive) {
             if (millis() - fallAlertStart < 5000) {
+                if(forceRedraw) tft.clearScreen();
                 tft.drawFallAlert(fallAlertStart);
             } else {
                 fallAlertActive = false;
-                tft.clearScreen();
+                forceRedraw = true;
             }
         } else {
             heartBeatTick = !heartBeatTick;
             if (currentScreen == SCREEN_HOME) {
-                tft.drawHomeScreen(d, heartBeatTick);
+                if(forceRedraw) tft.drawHomeScreen_BG();
+                tft.updateHomeScreen(d, heartBeatTick);
             } else {
-                tft.drawEnvScreen(d);
+                if(forceRedraw) tft.drawEnvScreen_BG();
+                tft.updateEnvScreen(d);
             }
         }
-
+        forceRedraw = false; // reset after draw
         vTaskDelay(pdMS_TO_TICKS(1000)); // Redraw every 1s
     }
 }
