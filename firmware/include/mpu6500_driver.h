@@ -1,5 +1,6 @@
 // include/mpu6500_driver.h
 #pragma once
+#include <MPU9250_WE.h>
 
 class MPU6500Driver {
 public:

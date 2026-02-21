@@ -1,5 +1,6 @@
 // src/drivers/mpu6500_driver.cpp
 #include "mpu6500_driver.h"
+#include <MPU9250_WE.h>
 #include <Arduino.h>
 
 bool MPU6500Driver::begin() {
