@@ -1,0 +1,6 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "esp32_30pin_revised")(type "KiCad")(uri "$(KIPRJMOD)/../libraries/symbols/esp32_30pin_revised.kicad_sym")(options "")(descr ""))
+  (lib (name "THG_WristWatch_Symbols")(type "KiCad")(uri "$(KIPRJMOD)/../libraries/symbols/THG_WristWatch_Symbols.kicad_sym")(options "")(descr ""))
+  (lib (name "ESP32_Feather_V2")(type "KiCad")(uri "$(KIPRJMOD)/../libraries/symbols/ESP32_Feather_V2.kicad_sym")(options "")(descr ""))
+)
