@@ -74,7 +74,7 @@ static void displayTask(void *pvParameters) {
         } else {
             heartBeatTick = !heartBeatTick;
             if (currentScreen == SCREEN_HOME) {
-                if(forceRedraw) tft.drawHomeScreen_BG();
+                if(forceRedraw) tft.clearScreen();
                 tft.updateHomeScreen(d, heartBeatTick);
             } else {
                 if(forceRedraw) tft.drawEnvScreen_BG();
@@ -93,6 +93,6 @@ bool displayInit() {
     }
     Serial.println("[Display] TFT ready.");
 
-    xTaskCreate(displayTask, "Display", 8192, NULL, 1, NULL);
+    xTaskCreate(displayTask, "Display", 8192, NULL, 15, NULL);
     return true;
 }

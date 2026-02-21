@@ -14,16 +14,34 @@
 #define TFT_RST  12
 
 // ── Colour Palette (RGB565) ───────────────────────────────
-#define COL_BG         0x0B0F
-#define COL_CARD       0x1082
-#define COL_ACCENT     0x07E8
-#define COL_ACCENT2    0x3C9F
-#define COL_TEXT       0xEF7D
-#define COL_SUBTEXT    0x8410
-#define COL_RED        0xF800
-#define COL_AMBER      0xFD00
-#define COL_GREEN      0x07E0
-#define COL_HEARTPULSE 0xF810
+#define GxTFT_BLACK     0x0000
+#define GxTFT_WHITE     0xFFFF
+#define GxTFT_RED       0xF800
+#define GxTFT_GREEN     0x07E0
+#define GxTFT_BLUE      0x001F
+#define GxTFT_CYAN      0x07FF
+#define GxTFT_MAGENTA   0xF81F
+#define GxTFT_YELLOW    0xFFE0
+#define GxTFT_ORANGE    0xFC00
+
+#define UI_BG           0x0841   // near-black
+#define UI_PANEL        0x1082   // dark card
+#define UI_BORDER       0x2945   // subtle border
+#define UI_GRAY         0x8410   // dim label text
+#define UI_DARKGRAY     0x4208
+#define UI_WHITE        0xFFFF
+#define UI_CYAN         0x07FF
+#define UI_RED          0xF800
+#define UI_GREEN        0x07E0
+#define UI_YELLOW       0xFFE0
+#define UI_ORANGE       0xFD20
+#define UI_PURPLE       0xC81F
+#define UI_CLOCK_FACE   0x1494   // dark blue-grey clock dial
+#define UI_CLOCK_RIM    0x2965
+
+#define CLK_CX  160
+#define CLK_CY   95
+#define CLK_R    70
 
 // ── Screen Dimensions ─────────────────────────────────────
 #define SCREEN_W 320
@@ -56,30 +74,31 @@ public:
 
     // ── Screens ───────────────────────────────────────────
     void drawSplash();
-    void drawHomeScreen_BG();
+    void drawWidget(const char* label, int x, int y, int w, int h, int value, const char* unit, uint16_t color);
     void updateHomeScreen(const DisplayData &d, bool heartBeatTick);
     void drawEnvScreen_BG();
     void updateEnvScreen (const DisplayData &d);
     void drawFallAlert (uint32_t fallAlertStart);
+    // New public method
+    void drawHomeScreen_BG();
 
     // ── Helpers (public so task can use them if needed) ───
     void drawText(int16_t x, int16_t y, const char *text,
                   uint8_t size, uint16_t color, bool centered = false);
-    void clearScreen(uint16_t color = COL_BG);
+    void clearScreen(uint16_t color = GxTFT_BLACK);
+    // Private members
+    float   _prevSecAngle  = -1;
+    float   _prevMinAngle  = -1;
+    float   _prevHourAngle = -1;
+    int     _prevHeading   = -1;
+
+    // Private helpers
+    void _drawHand(float angleDeg, int length, int thickness, uint16_t color);
+    void _redrawTicks();
+    void _drawPanelShell(int x, int y, int w, int h, uint16_t accent, const char *label);
+    void _updatePanelValue(int x, int y, int w, const char *valStr, const char *unit,
+                            uint16_t color, bool alert = false);
 
 private:
     Adafruit_ILI9341 tft{TFT_CS, TFT_DC, TFT_MOSI, TFT_SCK, TFT_RST, TFT_MISO};
-
-    // ── Widget draw calls ─────────────────────────────────
-    void drawHeartWidget   (uint8_t bpm, bool beat);
-    void drawEnvCard       (uint16_t co2, uint16_t tvoc,
-                            float temp, float rh, uint8_t spo2);
-    void drawAppButton     (int16_t x, int16_t y, uint16_t w, uint16_t h,
-                            uint16_t bg, const char *icon, const char *label);
-    void drawCompassWidget (float heading);
-    void drawGaugeArc      (int16_t cx, int16_t cy, int16_t r,
-                            float minVal, float maxVal, float val,
-                            uint16_t color, const char *label, const char *unit);
-    void drawHeartIcon     (int16_t x, int16_t y, uint16_t color);
-    void drawStatusBar     ();
 };
