@@ -123,4 +123,4 @@ private:
     uint16_t _co2Color(uint16_t c);
     uint16_t _tvocColor(uint16_t t);
     uint16_t _aqiColor(uint8_t aqi);
-}
+};

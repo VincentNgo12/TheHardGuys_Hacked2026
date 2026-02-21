@@ -39,7 +39,7 @@ static void displayTask(void *pvParameters) {
         float mag = sqrt(d.accelX * d.accelX +
                          d.accelY * d.accelY +
                          d.accelZ * d.accelZ);
-        if ((mag < 2.0f || mag > 25.0f) && !fallAlertActive) {
+        if ((mag < 0.5f || mag > 25.0f) && !fallAlertActive) {
             fallAlertActive = true;
             fallAlertStart  = millis();
             forceRedraw = true;
