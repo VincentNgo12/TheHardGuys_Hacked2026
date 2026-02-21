@@ -1,5 +1,5 @@
 #pragma once
-#include <Adafruit_ENS160.h>
+#include <ScioSense_ENS160.h>
 
 class ENS160Driver {
 public:

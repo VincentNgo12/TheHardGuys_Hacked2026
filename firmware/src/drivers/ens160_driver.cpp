@@ -1,4 +1,4 @@
-#include "ens160_driver.h"
+#include "ScioSense_ENS160.h"
 
 bool ENS160Driver::begin() {
     if (!ens.begin()) {

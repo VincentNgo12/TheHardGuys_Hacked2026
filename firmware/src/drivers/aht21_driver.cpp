@@ -1,11 +1,14 @@
 #pragma once
-#include <Adafruit_ENS160.h>
+#include <Adafruit_AHTX0.h>
 
-class ENS160Driver {
-public:
-    bool begin();
-    bool read(uint16_t &eco2, uint16_t &tvoc, int8_t &aqi);
+bool AHT21Driver::begin() {
+    return aht.begin();
+}
 
-private:
-    Adafruit_ENS160 ens;
-};
+bool AHT21Driver::read(float &temperature, float &humidity) {
+    sensors_event_t temp, hum;
+    aht.getEvent(&hum, &temp);
+    temperature = temp.temperature;
+    humidity = hum.relative_humidity;
+    return true;
+}
