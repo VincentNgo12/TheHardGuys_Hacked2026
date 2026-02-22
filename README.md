@@ -94,7 +94,7 @@ High-level folders (as included in this repository):
 ---
 
 ## Quick start (edit to match your setup)
-1. Open `firmware/` in **Arduino IDE** (or PlatformIO if you migrate later).
+1. Open `firmware/` in **Platform IO** 
 2. Install required libraries for the display + sensors.
 3. Select your ESP32 board, connect over USB, then **flash**.
 4. Verify: UI boots, sensors respond, and readings update.
@@ -104,20 +104,16 @@ High-level folders (as included in this repository):
 ## Credits
 **Team: The Hard Guys**  
 - Vincent Ngo: damduchu@ualberta.ca
+- Joao Pedro Assis Leitao: assislei@ualberta.ca
 - Luu Gregory Nguyen: luugrego@ualberta.ca
 - Jishnu Khanna: jkhanna@ualberta.ca
 - Finhas Tadesse: finhas@ualberta.ca
-- Joao Pedro Assis Leitao: assislei@ualberta.ca
 
 Special thanks:
-- Hackathon organizers + mentors
+- UofA CompE club for organizing this amazing Hackathon
 - Open-source libraries and community resources
 
 ---
 
 ## Disclaimer
 NEST is a **hackathon prototype** intended for wellness/comfort awareness and is **not a medical device**. 
-
-
-
-
