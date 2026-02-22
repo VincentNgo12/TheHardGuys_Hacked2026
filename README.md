@@ -50,18 +50,12 @@ NEST is organized as a clean pipeline so the UI stays responsive while keeping p
 
 A simple mental model:
 
-[ MAX30102 ]   [ ENS160 + AHT21 ]   [ MPU-6500 ]
-      |               |                |
-      +------->  Driver Layer (modular) <------+
-                      |
-                Task / Timing Layer
-      (polling, smoothing, thresholds, scheduling)
-                      |
-        +-------------+-------------+
-        |                           |
-   TFT Watch UI                 Alerts / BT
- (big text, icons)        (vibration + summaries)
-
+| Layer | Components | Output |
+|---|---|---|
+| Sensors | MAX30102 • ENS160 + AHT21 • MPU-6500 | Raw readings |
+| Driver Layer (modular) | Separate drivers per sensor | Standardized data |
+| Task / Timing Layer | Polling • smoothing • thresholds • scheduling | Latest “status” + values |
+| UI / Alerts | TFT Watch UI • Alerts/Bluetooth | On-screen info + vibration/summaries |
 
 ---
 
@@ -124,5 +118,6 @@ Special thanks:
 
 ## Disclaimer
 NEST is a **hackathon prototype** intended for wellness/comfort awareness and is **not a medical device**. 
+
 
 
