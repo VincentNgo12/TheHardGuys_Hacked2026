@@ -5,7 +5,7 @@
 NEST is a **low-power ESP32 wristwatch prototype** designed for older adults or people that does not have the ability to take care of themselves.  
 It helps users feel **safer, more comfortable, and more independent** by making key wellness and environment signals easy to check at a glance—without complicated menus or medical jargon.
 
-> **Our goal:** a reliable, power-efficient, hackathon-ready prototype with clean architecture and scalable code structure.
+**Our goal:** a reliable, power-efficient, hackathon-ready prototype with clean architecture and scalable code structure.
 
 ---
 
@@ -50,17 +50,17 @@ NEST is organized as a clean pipeline so the UI stays responsive while keeping p
 
 A simple mental model:
 
-[ MAX30102 ] [ ENS160 + AHT21 ] [ MPU-6500 ]
-| | |
-+-------> Driver Layer (modular) <------+
-|
-Task / Timing Layer
-(polling, smoothing, thresholds, scheduling)
-|
-+-------------+-------------+
-| |
-TFT Watch UI Alerts / BT
-(big text, icons) (vibration + summaries)
+[ MAX30102 ]   [ ENS160 + AHT21 ]   [ MPU-6500 ]
+      |               |                |
+      +------->  Driver Layer (modular) <------+
+                      |
+                Task / Timing Layer
+      (polling, smoothing, thresholds, scheduling)
+                      |
+        +-------------+-------------+
+        |                           |
+   TFT Watch UI                 Alerts / BT
+ (big text, icons)        (vibration + summaries)
 
 
 ---
@@ -124,4 +124,5 @@ Special thanks:
 
 ## Disclaimer
 NEST is a **hackathon prototype** intended for wellness/comfort awareness and is **not a medical device**. 
+
 
