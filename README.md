@@ -1,6 +1,5 @@
-# Smart Health Wristwatch — Firmware & Hardware Repository
-## NEST — Nursing Environment & Safety Tracker
-### Smart Health Wristwatch (Firmware + Hardware)
+# NEST — Nursing Environment & Safety Tracker
+### Smart Health Wristwatch
 
 NEST is a **low-power ESP32 wristwatch prototype** designed for older adults or people that does not have the ability to take care of themselves.  
 It helps users feel **safer, more comfortable, and more independent** by making key wellness and environment signals easy to check at a glance—without complicated menus or medical jargon.
@@ -118,6 +117,7 @@ Special thanks:
 
 ## Disclaimer
 NEST is a **hackathon prototype** intended for wellness/comfort awareness and is **not a medical device**. 
+
 
 
 
