@@ -1,504 +1,517 @@
+// firmware/src/tft_driver.cpp
+// ─────────────────────────────────────────────────────────────────
+//  "Sakura Band" TFT Driver Implementation
+//  ILI9341 320×240  –  ESP32 / Arduino
+//  Adafruit_GFX  +  Adafruit_ILI9341
+// ─────────────────────────────────────────────────────────────────
+
 #include "tft_driver.h"
-#include <Arduino.h>
-#include <math.h>
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  LAYOUT  (320 × 240 landscape)
-//
-//   y=  0..21   Status bar  ← "SMART BAND" left │ HH:MM:SS center │ compass right
-//   y= 23..110  ROW 1:  BPM card (x=2,w=96) │ Clock card (x=100,w=120) │ SpO2 (x=222,w=96)
-//   y=113..154  ROW 2:  Temp card (x=2,w=156) │ Humidity card (x=160,w=158)
-//   y=157..208  AQI panel (x=2, w=316)  ← badge │ CO2+bar │ TVOC+bar
-//   y=211..238  Bottom bar (x=2, w=316) ← AX/AY bars │ fall status
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ── Threshold colour selectors ───────────────────────────────────────────────
-
-uint16_t TFTDriver::_hrColor(uint8_t hr) {
-    if (hr == 0)              return UI_TEXT_MED;
-    if (hr < 45 || hr > 120)  return UI_VAL_ALERT;
-    if (hr < 55 || hr > 100)  return UI_VAL_WARN;
-    return UI_VAL_GOOD;
-}
-uint16_t TFTDriver::_spo2Color(uint8_t s) {
-    if (s == 0)  return UI_TEXT_MED;
-    if (s < 90)  return UI_VAL_ALERT;
-    if (s < 95)  return UI_VAL_WARN;
-    return UI_VAL_GOOD;
-}
-uint16_t TFTDriver::_tempColor(float t) {
-    if (t > 35.0f || t < 10.0f) return UI_VAL_ALERT;
-    if (t > 28.0f || t < 15.0f) return UI_VAL_WARN;
-    return UI_VAL_GOOD;
-}
-uint16_t TFTDriver::_humidColor(float h) {
-    if (h < 20.0f || h > 80.0f) return UI_VAL_ALERT;
-    if (h < 30.0f || h > 65.0f) return UI_VAL_WARN;
-    return UI_VAL_GOOD;
-}
-uint16_t TFTDriver::_co2Color(uint16_t c) {
-    if (c > 1500) return UI_VAL_ALERT;
-    if (c >  600) return UI_VAL_WARN;
-    return UI_VAL_GOOD;
-}
-uint16_t TFTDriver::_tvocColor(uint16_t t) {
-    if (t > 500) return UI_VAL_ALERT;
-    if (t > 150) return UI_VAL_WARN;
-    return UI_VAL_GOOD;
-}
-uint16_t TFTDriver::_aqiColor(uint8_t aqi) {
-    switch (aqi) {
-        case 1:  return AQI_COL_1;
-        case 2:  return AQI_COL_2;
-        case 3:  return AQI_COL_3;
-        case 4:  return AQI_COL_4;
-        default: return AQI_COL_5;
-    }
-}
-
-// ── Draw primitives ──────────────────────────────────────────────────────────
-
-// White rounded card with a thin coloured border.
-void TFTDriver::_drawCard(int x, int y, int w, int h, uint16_t border) {
-    tft.fillRoundRect(x, y, w, h, 6, UI_CARD);
-    tft.drawRoundRect(x, y, w, h, 6, border);
-}
-
-// Heart icon centred at (cx, cy). sz is the half-span of the whole shape.
-void TFTDriver::_drawHeart(int cx, int cy, int sz, uint16_t color) {
-    int r = (sz + 1) / 2;
-    tft.fillCircle(cx - r, cy, r, color);
-    tft.fillCircle(cx + r, cy, r, color);
-    tft.fillTriangle(cx - sz + 1, cy + 1,
-                     cx + sz - 1, cy + 1,
-                     cx,          cy + sz, color);
-}
-
-// Mini compass rose at (cx, cy) radius r, needle at heading degrees.
-// Fully redraws itself so it can be called each tick if needed.
-void TFTDriver::_drawMiniCompass(int cx, int cy, int r, int heading) {
-    tft.fillCircle(cx, cy, r, UI_CARD);
-    tft.drawCircle(cx, cy, r, UI_BORDER);
-    tft.setTextColor(UI_TEXT_DARK); tft.setTextSize(1);
-    tft.setCursor(cx - 3, cy - r + 2); tft.print("N");
-    float rad = heading * PI / 180.0f;
-    tft.drawLine(cx, cy,
-                 cx + (int)((r - 3) * sin(rad)),
-                 cy - (int)((r - 3) * cos(rad)),
-                 UI_ACCENT);               // north tip – rose
-    tft.drawLine(cx, cy,
-                 cx - (int)((r - 4) * sin(rad)),
-                 cy + (int)((r - 4) * cos(rad)),
-                 UI_TEXT_MED);             // south tail – grey
-    tft.fillCircle(cx, cy, 2, UI_TEXT_DARK);
-}
-
-// Horizontal progress bar.  frac in [0..1].  Track colour = UI_BG.
-void TFTDriver::_drawHBar(int x, int y, int w, int h,
-                           float frac, uint16_t color) {
-    tft.fillRoundRect(x, y, w, h, 2, UI_BG);
-    int fill = constrain((int)(frac * w), 0, w);
-    if (fill > 0) tft.fillRoundRect(x, y, fill, h, 2, color);
-}
-
-// ── Legacy env-screen panel helpers ─────────────────────────────────────────
-
-void TFTDriver::_drawPanelShell(int x, int y, int w, int h,
-                                 uint16_t accent, const char *label) {
-    tft.fillRoundRect(x, y, w, h, 4, UI_CARD);
-    tft.drawRoundRect(x, y, w, h, 4, accent);
-    tft.fillRect(x + 1, y + 1, w - 2, 3, accent);
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    int tw = strlen(label) * 6;
-    tft.setCursor(x + (w - tw) / 2, y + 6);
-    tft.print(label);
-}
-
-void TFTDriver::_updatePanelValue(int x, int y, int w,
-                                   const char *valStr, const char *unit,
-                                   uint16_t color, bool alert) {
-    tft.fillRect(x + 1, y + 16, w - 2, 34, UI_CARD);
-    tft.setTextColor(alert ? UI_VAL_ALERT : color);
-    tft.setTextSize(3);
-    int tw = strlen(valStr) * 18;
-    tft.setCursor(x + (w - tw) / 2, y + 18);
-    tft.print(valStr);
-    tft.fillRect(x + 1, y + 50, w - 2, 10, UI_CARD);
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tw = strlen(unit) * 6;
-    tft.setCursor(x + (w - tw) / 2, y + 52);
-    tft.print(unit);
-}
-
-// ── Legacy drawWidget (kept so old callsites still compile) ──────────────────
-
-void TFTDriver::drawWidget(const char *label, int x, int y, int w, int h,
-                            int value, const char *unit, uint16_t color) {
-    _drawPanelShell(x, y, w, h, color, label);
-    char buf[12];
-    snprintf(buf, sizeof(buf), "%d", value);
-    _updatePanelValue(x, y, w, buf, unit, color);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  INIT
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
+//  LIFECYCLE
+// ═════════════════════════════════════════════════════════════════
 
 bool TFTDriver::begin() {
     tft.begin();
-    tft.setRotation(1);
-    tft.fillScreen(UI_BG);
-    _prevHeading = -1;
+    tft.setRotation(1);   // landscape, USB at left
+    tft.fillScreen(C_BG);
     return true;
 }
 
-void TFTDriver::clearScreen(uint16_t color) { tft.fillScreen(color); }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  SPLASH
-// ─────────────────────────────────────────────────────────────────────────────
+void TFTDriver::clearScreen(uint16_t color) {
+    tft.fillScreen(color);
+}
 
 void TFTDriver::drawSplash() {
-    tft.fillScreen(UI_BG);
-
-    // Soft glowing halo
-    tft.fillCircle(160, 95, 53, UI_ACCENT_SOFT);
-    tft.fillCircle(160, 95, 50, UI_CARD);
-    _drawHeart(160, 80, 14, UI_ACCENT);
-
-    tft.setTextColor(UI_TEXT_DARK); tft.setTextSize(2);
-    tft.setCursor(107, 104); tft.print("SMART BAND");
-
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(88, 120); tft.print("ESP32 Feather V2  v1.0");
-    tft.setCursor(108, 132); tft.print("Initializing...");
-
-    tft.drawRoundRect(60, 155, 200, 8, 3, UI_BORDER);
-    for (int i = 0; i <= 196; i += 4) {
-        tft.fillRoundRect(62, 157, i, 4, 2, UI_ACCENT);
-        delay(15);
-    }
+    tft.fillScreen(C_BG);
+    // Central blossom
+    _drawBlossom(SCREEN_W / 2, SCREEN_H / 2 - 16, 28, C_ACCENT2, C_ACCENT);
+    // Title
+    drawText(SCREEN_W / 2, SCREEN_H / 2 + 20, "Sakura Band", 2, C_ACCENT, true);
+    drawText(SCREEN_W / 2, SCREEN_H / 2 + 40, "initialising...", 1, C_SUBTEXT, true);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  HOME SCREEN – STATIC BACKGROUND  (call once on screen switch)
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
+//  HOME SCREEN  (Screen 0)
+// ═════════════════════════════════════════════════════════════════
 
 void TFTDriver::drawHomeScreen_BG() {
-    tft.fillScreen(UI_BG);
+    tft.fillScreen(C_BG);
+    _drawSakuraBranch(false);
 
-    // ── Status bar (y=0..21) ─────────────────────────────
-    tft.fillRect(0, 0, 320, 22, UI_STATUSBAR);
-    tft.setTextColor(UI_TEXT_DARK); tft.setTextSize(1);
-    tft.setCursor(6, 7); tft.print("SMART BAND");
+    // ── Nav buttons (static) ──────────────────────────────────
+    _drawCard(204, 100, 60, 18, 5, C_CARD_A, C_ACCENT2);
+    drawText(212, 106, "* Alert", 1, C_ACCENT);
 
-    // Compass rose shell – needle drawn dynamically in update
-    tft.fillCircle(COMPASS_CX, COMPASS_CY, COMPASS_R, UI_CARD);
-    tft.drawCircle(COMPASS_CX, COMPASS_CY, COMPASS_R, UI_BORDER);
-    tft.setTextColor(UI_TEXT_DARK); tft.setTextSize(1);
-    tft.setCursor(COMPASS_CX - 3, COMPASS_CY - COMPASS_R + 2);
-    tft.print("N");
+    _drawCard(204, 122, 60, 18, 5, C_CARD_A, C_ACCENT2);
+    drawText(216, 128, "Air ~", 1, C_ACCENT);
 
-    // ── ROW 1 cards (y=23, h=88) ─────────────────────────
-    //  BPM  : x=2,   w=96   centre_x=50
-    //  Clock: x=100, w=120  centre_x=160
-    //  SpO2 : x=222, w=96   centre_x=270
-    _drawCard(  2, 23,  96, 88, UI_ACCENT_SOFT);
-    _drawCard(100, 23, 120, 88, UI_BORDER);
-    _drawCard(222, 23,  96, 88, UI_VAL_INFO);
-
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(20, 28); tft.print("HEART RATE");   // centred in w=96
-    tft.setCursor(143, 28); tft.print("TIME");         // centred in w=120
-    tft.setCursor(252, 28); tft.print("SpO2");         // centred in w=96
-
-    // ── ROW 2 cards (y=113, h=42) ────────────────────────
-    //  Temp : x=2,   w=156  centre_x=80
-    //  Humid: x=160, w=158  centre_x=239
-    _drawCard(  2, 113, 156, 42, UI_VAL_WARN);
-    _drawCard(160, 113, 158, 42, UI_VAL_INFO);
-
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(47, 118); tft.print("TEMPERATURE");  // "TEMPERATURE" 66px, centred at 80
-    tft.setCursor(215, 118); tft.print("HUMIDITY");    // "HUMIDITY" 48px, centred at 239
-
-    // ── AQI panel (y=157, h=52) ──────────────────────────
-    //  Three zones separated by vertical lines:
-    //    Badge : x=3..87   centre_x=45
-    //    CO2   : x=89..203 centre_x=146
-    //    TVOC  : x=205..317 centre_x=261
-    tft.fillRoundRect(2, 157, 316, 52, 6, UI_CARD);
-    tft.drawRoundRect(2, 157, 316, 52, 6, UI_BORDER);
-    tft.drawFastVLine( 88, 162, 42, UI_BORDER);
-    tft.drawFastVLine(204, 162, 42, UI_BORDER);
-
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(11, 162); tft.print("AIR QUALITY");  // 66px centred at 45
-    tft.setCursor(137, 162); tft.print("CO2");          // 18px centred at 146
-    tft.setCursor(249, 162); tft.print("TVOC");         // 24px centred at 261
-
-    // ── Bottom bar (y=211, h=27) ─────────────────────────
-    tft.fillRoundRect(  2, 211, 316, 27, 4, UI_CARD);
-    tft.drawRoundRect(  2, 211, 316, 27, 4, UI_BORDER);
-
-    tft.setTextColor(UI_TEXT_LIGHT); tft.setTextSize(1);
-    tft.setCursor(6, 215); tft.print("AX");
-    tft.setCursor(6, 225); tft.print("AY");
-    // Bar track outlines
-    tft.drawRoundRect(22, 214, 110, 5, 2, UI_BORDER);
-    tft.drawRoundRect(22, 224, 110, 5, 2, UI_BORDER);
+    // ── ENV summary card shell ────────────────────────────────
+    _drawCard(8, 172, 252, 60, 8, C_CARD_A, C_ACCENT2);
+    const char *lbl[] = { "eCO2", "Hum.", "TVOC", "Temp" };
+    const char *unt[] = { "ppm",  "%",    "ppb",  "*C"   };
+    for (int i = 0; i < 4; i++) {
+        int sx = 10 + i * 62;
+        drawText(sx + 2, 172 + 6,  lbl[i], 1, C_SUBTEXT);
+        drawText(sx + 2, 172 + 48, unt[i], 1, C_SUBTEXT);
+        if (i < 3)
+            tft.drawLine(sx + 61, 176, sx + 61, 228, C_ACCENT3);
+    }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  HOME SCREEN – DYNAMIC UPDATE
-// ─────────────────────────────────────────────────────────────────────────────
 
 void TFTDriver::updateHomeScreen(const DisplayData &d, bool heartBeatTick) {
+    // ── Status bar ────────────────────────────────────────────
+    _drawStatusBar(true, d.battPct);
+
+    // ── Clock ─────────────────────────────────────────────────
+    // Pass bgColor so each character cell self-erases the previous digit.
+    // This is the only reliable fix for digits "sticking" when they change.
     char buf[16];
+    snprintf(buf, sizeof(buf), "%02d:%02d", 11, 11);
+    drawText(8, 24, buf, 5, C_TEXT, false, C_BG);
 
-    // ── Uptime ────────────────────────────────────────────
-    uint32_t s  = millis() / 1000;
-    uint8_t  hh = (s / 3600) % 24;
-    uint8_t  mm = (s / 60)   % 60;
-    uint8_t  ss =  s          % 60;
+    snprintf(buf, sizeof(buf), "%02d", d.sec);
+    drawText(10, 76, buf, 2, C_ACCENT, false, C_BG);
 
-    // Status bar – time (centre of bar, skip compass zone)
-    tft.fillRect(88, 4, 130, 13, UI_STATUSBAR);
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hh, mm, ss);
-    tft.setTextColor(UI_TEXT_DARK); tft.setTextSize(1);
-    tft.setCursor(100, 7); tft.print(buf);
+    drawText(10, 94, d.dateStr, 1, C_SUBTEXT, false, C_BG);
 
-    // Compass (redraws its own background, so safe to call each tick)
-    _drawMiniCompass(COMPASS_CX, COMPASS_CY, COMPASS_R, 0);
-    // ↑ Replace 0 with actual magnetometer heading when hardware is wired up.
+    // Rose accent line
+    tft.fillRect(10, 106, 120, 1, C_BG);
+    for (int i = 0; i < 120; i++)
+        tft.drawPixel(10 + i, 106,
+            i < 80  ? C_ACCENT  :
+            i < 100 ? C_ACCENT2 : C_ACCENT3);
 
-    // ─────────────────────────────────────────────────────
-    //  ROW 1 — HEART RATE card (x=2, y=23, w=96, h=88)
-    //  Dynamic area: y=37..110  (below the static label at y=28)
-    // ─────────────────────────────────────────────────────
-    tft.fillRect(3, 37, 94, 72, UI_CARD);
+    // ── Compass ───────────────────────────────────────────────
+    _drawCompass(232, 58, 26, d.bearing);
 
-    // Heart icon – pulses bright on beat, soft at rest
-    _drawHeart(50, 52, 10, heartBeatTick ? UI_ACCENT : UI_ACCENT_SOFT);
+    // ── Heart-rate card ───────────────────────────────────────
+    uint16_t hrCol = heartBeatTick ? C_ROSE : _hrColor(d.heartRate);
+    _drawCard(8, 114, 148, 50, 10, C_CARD_A, C_ACCENT2);
 
-    // BPM value
-    uint16_t hrCol = _hrColor(d.heartRate);
+    // Heart shape
+    int hx = 8, hy = 114;
+    _drawHeart(hx + 18, hy + 22, 7, hrCol);
+
+    // BPM number
     snprintf(buf, sizeof(buf), "%d", d.heartRate);
-    tft.setTextColor(hrCol); tft.setTextSize(3);
-    int tw = strlen(buf) * 18;
-    tft.setCursor(50 - tw / 2, 66); tft.print(buf);
+    tft.fillRect(hx + 34, hy + 12, 60, 28, C_CARD_A);
+    drawText(hx + 34, hy + 12, buf, 3, hrCol);
+    drawText(hx + 34, hy + 40, "bpm", 1, C_SUBTEXT);
 
-    tft.setTextColor(UI_TEXT_LIGHT); tft.setTextSize(1);
-    tft.setCursor(44, 92); tft.print("bpm");
+    // Mini ECG trace
+    const int16_t ep[][2] = {
+        {0,0},{6,0},{8,4},{10,-8},{12,8},{14,0},
+        {18,0},{20,-2},{22,2},{24,0},{38,0}
+    };
+    int ex = hx + 98, ey = hy + 26;
+    for (int i = 0; i < 10; i++)
+        tft.drawLine(ex + ep[i][0],   ey + ep[i][1]   * 2,
+                     ex + ep[i+1][0], ey + ep[i+1][1] * 2,
+                     hrCol);
 
-    // ─────────────────────────────────────────────────────
-    //  ROW 1 — CLOCK card (x=100, y=23, w=120, h=88)
-    //  centre_x=160
-    // ─────────────────────────────────────────────────────
-    tft.fillRect(101, 37, 118, 72, UI_CARD);
+    // ── ENV summary values ────────────────────────────────────
+    char vals[4][10];
+    snprintf(vals[0], 10, "%d",   d.eCO2);
+    snprintf(vals[1], 10, "%d",   (int)d.humidity);
+    snprintf(vals[2], 10, "%d",   d.eTVOC);
+    snprintf(vals[3], 10, "%.1f", d.temperature);
 
-    snprintf(buf, sizeof(buf), "%02d:%02d", hh, mm);
-    tft.setTextColor(UI_ACCENT); tft.setTextSize(3);
-    tw = strlen(buf) * 18;                            // "12:34" = 90 px
-    tft.setCursor(160 - tw / 2, 47); tft.print(buf);
+    uint16_t vcols[4] = {
+        _co2Color(d.eCO2),
+        _humidColor(d.humidity),
+        _tvocColor(d.eTVOC),
+        _tempColor(d.temperature)
+    };
 
-    snprintf(buf, sizeof(buf), ":%02d", ss);
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(2);
-    tw = strlen(buf) * 12;
-    tft.setCursor(160 - tw / 2, 78); tft.print(buf);
-
-    // ─────────────────────────────────────────────────────
-    //  ROW 1 — SpO2 card (x=222, y=23, w=96, h=88)
-    //  centre_x=270
-    // ─────────────────────────────────────────────────────
-    tft.fillRect(223, 37, 94, 72, UI_CARD);
-
-    uint16_t spo2Col = _spo2Color(d.spo2);
-    tft.fillCircle(270, 50, 5, spo2Col);               // saturation indicator dot
-
-    snprintf(buf, sizeof(buf), "%d", d.spo2);
-    tft.setTextColor(spo2Col); tft.setTextSize(3);
-    tw = strlen(buf) * 18;
-    tft.setCursor(270 - tw / 2, 63); tft.print(buf);
-
-    tft.setTextColor(UI_TEXT_LIGHT); tft.setTextSize(1);
-    tft.setCursor(263, 91); tft.print("% O2");
-
-    // ─────────────────────────────────────────────────────
-    //  ROW 2 — TEMPERATURE  (x=2, y=113, w=156, h=42)
-    // ─────────────────────────────────────────────────────
-    tft.fillRect(3, 122, 154, 30, UI_CARD);
-    uint16_t tmpCol = _tempColor(d.temperature);
-    snprintf(buf, sizeof(buf), "%.1f \xF7""C", d.temperature);
-    tft.setTextColor(tmpCol); tft.setTextSize(2);
-    tft.setCursor(10, 128); tft.print(buf);
-
-    // ─────────────────────────────────────────────────────
-    //  ROW 2 — HUMIDITY  (x=160, y=113, w=158, h=42)
-    // ─────────────────────────────────────────────────────
-    tft.fillRect(161, 122, 156, 30, UI_CARD);
-    uint16_t humCol = _humidColor(d.humidity);
-    snprintf(buf, sizeof(buf), "%.0f%%  RH", d.humidity);
-    tft.setTextColor(humCol); tft.setTextSize(2);
-    tft.setCursor(168, 128); tft.print(buf);
-
-    // ─────────────────────────────────────────────────────
-    //  AQI PANEL  (x=2, y=157, w=316, h=52)
-    //  Static labels sit at y=162..169.
-    //  Dynamic content: y=171..205.
-    // ─────────────────────────────────────────────────────
-
-    // — Badge zone (x=3..87) —
-    tft.fillRect(3, 171, 85, 34, UI_CARD);
-    uint16_t aqiCol = _aqiColor(d.aqi);
-    tft.fillRoundRect(4, 172, 82, 32, 4, aqiCol);
-
-    tft.setTextColor(UI_CARD); tft.setTextSize(2);
-    snprintf(buf, sizeof(buf), "%d", d.aqi);
-    tft.setCursor(20, 176); tft.print(buf);
-
-    tft.setTextSize(1);
-    const char *aqiStr;
-    switch (d.aqi) {
-        case 1: aqiStr = "GOOD"; break;
-        case 2: aqiStr = "FAIR"; break;
-        case 3: aqiStr = "MOD."; break;
-        case 4: aqiStr = "POOR"; break;
-        default: aqiStr = "HAZD"; break;
-    }
-    tw = strlen(aqiStr) * 6;
-    tft.setCursor(44 - tw / 2, 192); tft.print(aqiStr);
-
-    // — CO2 zone (x=89..203, centre=146) —
-    tft.fillRect(89, 171, 114, 34, UI_CARD);
-    uint16_t co2Col = _co2Color(d.eCO2);
-
-    snprintf(buf, sizeof(buf), "%d", d.eCO2);
-    tft.setTextColor(co2Col); tft.setTextSize(2);
-    tw = strlen(buf) * 12;
-    tft.setCursor(146 - tw / 2, 173); tft.print(buf);
-
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(138, 190); tft.print("ppm");
-
-    // CO2 progress bar  (0–2000 ppm → 0–106 px)
-    _drawHBar(92, 200, 106, 4, constrain(d.eCO2 / 2000.0f, 0.f, 1.f), co2Col);
-
-    // — TVOC zone (x=205..317, centre=261) —
-    tft.fillRect(205, 171, 112, 34, UI_CARD);
-    uint16_t tvocCol = _tvocColor(d.eTVOC);
-
-    snprintf(buf, sizeof(buf), "%d", d.eTVOC);
-    tft.setTextColor(tvocCol); tft.setTextSize(2);
-    tw = strlen(buf) * 12;
-    tft.setCursor(261 - tw / 2, 173); tft.print(buf);
-
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(252, 190); tft.print("ppb");
-
-    // TVOC progress bar  (0–1000 ppb → 0–108 px)
-    _drawHBar(208, 200, 108, 4, constrain(d.eTVOC / 1000.0f, 0.f, 1.f), tvocCol);
-
-    // ─────────────────────────────────────────────────────
-    //  BOTTOM BAR  (x=2, y=211, w=316, h=27)
-    // ─────────────────────────────────────────────────────
-    tft.fillRect(23, 213, 109, 22, UI_CARD);           // clear bar area only
-
-    // Accel bars — map ±4 g → [0, 1]
-    float axf = constrain((d.accelX + 4.0f) / 8.0f, 0.f, 1.f);
-    float ayf = constrain((d.accelY + 4.0f) / 8.0f, 0.f, 1.f);
-    _drawHBar(23, 214, 110, 5, axf, UI_VAL_INFO);
-    _drawHBar(23, 224, 110, 5, ayf, UI_VAL_INFO);
-
-    // Fall status badge
-    tft.fillRect(170, 213, 146, 22, UI_CARD);
-    if (d.fallDetected) {
-        tft.fillRoundRect(170, 213, 145, 22, 3, UI_VAL_ALERT);
-        tft.setTextColor(UI_CARD); tft.setTextSize(1);
-        tft.setCursor(178, 219); tft.print("!! FALL DETECTED !!");
-    } else {
-        tft.fillRoundRect(170, 213, 145, 22, 3, UI_VAL_GOOD);
-        tft.setTextColor(UI_CARD); tft.setTextSize(1);
-        tft.setCursor(218, 219); tft.print("ALL CLEAR");
+    // Re-stamp every row of each ENV column on every update.
+    // Two-arg drawText (fg + bg) makes each glyph cell self-erasing,
+    // so label, value, and unit can never overwrite each other.
+    const char *lbl[] = { "eCO2", "Hum.", "TVOC", "Temp" };
+    const char *unt[] = { "ppm",  "%",    "ppb",  "*C"   };
+    for (int i = 0; i < 4; i++) {
+        int sx = 10 + i * 62;
+        drawText(sx + 2, 172 +  6, lbl[i],  1, C_SUBTEXT, false, C_CARD_A); // label
+        drawText(sx + 2, 172 + 18, vals[i], 2, vcols[i],  false, C_CARD_A); // value (size-2 = 16 px tall)
+        drawText(sx + 2, 172 + 38, unt[i],  1, C_SUBTEXT, false, C_CARD_A); // unit  (clear of value row)
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ENV SCREEN  (detail view – called from serial command / touch)
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
+//  ENV / AIR QUALITY SCREEN  (Screen 1)
+// ═════════════════════════════════════════════════════════════════
 
 void TFTDriver::drawEnvScreen_BG() {
-    tft.fillScreen(UI_BG);
+    tft.fillScreen(C_BG);
+    _drawSakuraBranch(true);
 
-    // Header
-    tft.fillRect(0, 0, 320, 22, UI_STATUSBAR);
-    tft.setTextColor(UI_ACCENT);  tft.setTextSize(1);
-    tft.setCursor(4, 7); tft.print("< HOME");
-    tft.setTextColor(UI_TEXT_DARK);
-    tft.setCursor(72, 7); tft.print("ENVIRONMENT  &  AIR QUALITY");
+    // Row label
+    drawText(110, 6, "AIR QUALITY", 1, C_SUBTEXT);
 
-    // Four panel shells (pink-themed)
-    _drawPanelShell(  4,  26, 148, 100, UI_VAL_WARN,  "TEMPERATURE");
-    _drawPanelShell(  4, 132, 148, 100, UI_VAL_INFO,  "HUMIDITY");
-    _drawPanelShell(166,  26, 150, 100, UI_VAL_GOOD,  "eCO2");
-    _drawPanelShell(166, 132, 150, 100, UI_VAL_WARN,  "eTVOC");
+    // Static gauge labels – top row
+    drawText(18, 26, "TEMP", 1, C_SUBTEXT);
+    drawText(108, 26, "HUM",  1, C_SUBTEXT);
+
+    // AQI box shell
+    _drawCard(198, 30, 100, 78, 8, C_CARD_A, C_ACCENT2);
+    drawText(208, 40, "AIR QUALITY", 1, C_SUBTEXT);
+    drawText(226, 88, "index", 1, C_SUBTEXT);
+
+    // Dashed divider
+    for (int i = 8; i < SCREEN_W - 8; i += 6)
+        tft.drawFastHLine(i, 120, 3, C_ACCENT3);
+
+    // Static gauge labels – bottom row
+    const char *blbl[] = { "eCO2", "TVOC", "SpO2" };
+    for (int i = 0; i < 3; i++)
+        drawText(18 + i * 100, 128, blbl[i], 1, C_SUBTEXT);
 }
 
 void TFTDriver::updateEnvScreen(const DisplayData &d) {
-    char buf[12];
+    _drawStatusBar(false, d.battPct);
 
-    snprintf(buf, sizeof(buf), "%.1f", d.temperature);
-    _updatePanelValue(  4,  26, 148, buf, "\xF7""C",
-                       _tempColor(d.temperature),
-                       d.temperature > 37.5f);
+    // ── Top row gauges ────────────────────────────────────────
+    // TEMP
+    float tFrac = constrain((d.temperature + 10.f) / 60.f, 0.f, 1.f);
+    _drawGaugeArc(50, 90, 34, 7, 215, 325, C_ACCENT3, C_ACCENT, tFrac);
+    char tbuf[10]; snprintf(tbuf, sizeof(tbuf), "%.1f", d.temperature);
+    tft.fillRect(30, 78, 42, 18, C_BG);
+    drawText(38, 82, tbuf, 1, C_TEXT);
+    drawText(44, 93, "*C",   1, C_SUBTEXT);
 
-    snprintf(buf, sizeof(buf), "%.0f", d.humidity);
-    _updatePanelValue(  4, 132, 148, buf, "% RH",
-                       _humidColor(d.humidity),
-                       d.humidity < 20.f || d.humidity > 80.f);
+    // HUM
+    _drawGaugeArc(135, 90, 34, 7, 215, 325,
+                  C_ACCENT3, C_MINT, constrain(d.humidity / 100.f, 0.f, 1.f));
+    char hbuf[8]; snprintf(hbuf, sizeof(hbuf), "%d", (int)d.humidity);
+    tft.fillRect(115, 78, 42, 18, C_BG);
+    drawText(127, 82, hbuf, 1, C_TEXT);
+    drawText(132, 93, "%",   1, C_SUBTEXT);
 
-    snprintf(buf, sizeof(buf), "%d", d.eCO2);
-    _updatePanelValue(166,  26, 150, buf, "ppm",
-                      _co2Color(d.eCO2), d.eCO2 > 1500);
+    // AQI box value
+    uint16_t aqiCol = _aqiColor(d.aqi);
+    const char *aqiTxt = (d.eCO2 >= 1500) ? "Poor"  :
+                         (d.eCO2 >= 800)  ? "Mod."  : "Good";
+    tft.fillRect(200, 52, 96, 30, C_CARD_A);
+    drawText(210, 56, aqiTxt, 2, aqiCol);
 
-    snprintf(buf, sizeof(buf), "%d", d.eTVOC);
-    _updatePanelValue(166, 132, 150, buf, "ppb",
-                      _tvocColor(d.eTVOC), d.eTVOC > 500);
+    // ── Bottom row gauges ─────────────────────────────────────
+    // eCO2
+    float co2Frac  = constrain((d.eCO2 - 400.f) / 1600.f, 0.f, 1.f);
+    float tvocFrac = constrain(d.eTVOC / 500.f, 0.f, 1.f);
+    float spo2Frac = constrain((d.spo2 - 90.f) / 10.f, 0.f, 1.f);
+
+    uint16_t co2Col  = _co2Color(d.eCO2);
+    uint16_t tvocCol = _tvocColor(d.eTVOC);
+    uint16_t spo2Col = _spo2Color(d.spo2);
+
+    struct { float frac; uint16_t col; char val[10]; } gauges[3];
+    snprintf(gauges[0].val, 10, "%d",   d.eCO2);  gauges[0].frac = co2Frac;  gauges[0].col = co2Col;
+    snprintf(gauges[1].val, 10, "%d",   d.eTVOC); gauges[1].frac = tvocFrac; gauges[1].col = tvocCol;
+    snprintf(gauges[2].val, 10, "%d%%", d.spo2);  gauges[2].frac = spo2Frac; gauges[2].col = spo2Col;
+
+    for (int i = 0; i < 3; i++) {
+        int gx = 18 + i * 100;
+        _drawGaugeArc(gx + 30, 192, 26, 6, 215, 325,
+                      C_ACCENT3, gauges[i].col, gauges[i].frac);
+        tft.fillRect(gx + 8, 178, 50, 20, C_BG);
+        drawText(gx + 14, 185, gauges[i].val, 1, gauges[i].col);
+    }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
 //  FALL ALERT OVERLAY
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
 
 void TFTDriver::drawFallAlert(uint32_t fallAlertStart) {
-    // Semi-opaque modal frame
-    tft.fillRoundRect(40, 58, 240, 124, 12, UI_CARD);
-    tft.drawRoundRect(40, 58, 240, 124, 12, UI_VAL_ALERT);
-    tft.drawRoundRect(41, 59, 238, 122, 12, UI_ACCENT_SOFT);
+    float prog = constrain((millis() - fallAlertStart) / 5000.f, 0.f, 1.f);
 
-    tft.setTextColor(UI_VAL_ALERT); tft.setTextSize(3);
-    tft.setCursor(148, 68); tft.print("!");
+    // Darken every other row
+    for (int y = 0; y < SCREEN_H; y += 2)
+        tft.drawFastHLine(0, y, SCREEN_W, C_DARK);
 
-    tft.setTextColor(UI_VAL_ALERT); tft.setTextSize(2);
-    tft.setCursor(82, 98); tft.print("FALL DETECTED");
+    // Alert card
+    _drawCard(40, 48, 240, 134, 12, 0x1082, C_ROSE);
+    tft.drawRoundRect(41, 49, 238, 132, 11, 0xF041);
 
-    tft.setTextColor(UI_TEXT_MED); tft.setTextSize(1);
-    tft.setCursor(68, 128); tft.print("Sudden motion event detected.");
-    tft.setCursor(80, 140); tft.print("Are you okay? Alert in 5s.");
+    // Warning triangle
+    tft.fillTriangle(160, 68, 132, 116, 188, 116, C_AMBER);
+    tft.fillTriangle(160, 76, 137, 112, 183, 112, C_DARK);
+    drawText(155, 90, "!", 2, C_AMBER);
 
-    float p = constrain((float)(millis() - fallAlertStart) / 5000.0f, 0.f, 1.f);
-    tft.fillRect(60, 160, 200, 8, UI_BG);
-    tft.fillRect(60, 160, (int)(200 * p), 8, UI_ACCENT);
+    // Title & body
+    drawText(60,  124, "FALL DETECTED",               2, 0xFF81);
+    drawText(50,  149, "Sudden motion event detected.", 1, 0xCE79);
+    drawText(62,  161, "Are you okay? Alert in 5s.",   1, 0xCE79);
+
+    // Countdown progress bar
+    tft.drawRoundRect(55, 172, 210, 8, 3, C_ROSE);
+    int bw = (int)(206 * prog);
+    if (bw > 0) tft.fillRect(57, 174, bw, 4, C_ROSE);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
+//  GENERIC WIDGET  (legacy compatibility)
+// ═════════════════════════════════════════════════════════════════
+
+void TFTDriver::drawWidget(const char *label, int x, int y, int w, int h,
+                           int value, const char *unit, uint16_t color) {
+    _drawCard(x, y, w, h, 6, C_CARD_A, C_ACCENT2);
+    drawText(x + 4, y + 4,  label, 1, C_SUBTEXT);
+    char buf[12]; snprintf(buf, sizeof(buf), "%d", value);
+    drawText(x + 4, y + 16, buf,   2, color);
+    drawText(x + 4, y + h - 12, unit, 1, C_SUBTEXT);
+}
+
+// ═════════════════════════════════════════════════════════════════
 //  TEXT HELPER
-// ─────────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
 
 void TFTDriver::drawText(int16_t x, int16_t y, const char *text,
-                          uint8_t size, uint16_t color, bool centered) {
-    tft.setTextColor(color);
+                         uint8_t size, uint16_t color, bool centered,
+                         uint16_t bgColor) {
+    // Two-arg setTextColor fills each character cell's background,
+    // so previous digits are fully erased without a separate fillRect.
+    tft.setTextColor(color, bgColor);
     tft.setTextSize(size);
-    tft.setCursor(centered ? x - (int16_t)(strlen(text) * 6 * size) / 2 : x, y);
+    if (centered) {
+        int16_t x1, y1; uint16_t tw, th;
+        tft.getTextBounds(text, 0, 0, &x1, &y1, &tw, &th);
+        x -= tw / 2;
+    }
+    tft.setCursor(x, y);
     tft.print(text);
+    // Restore transparent mode so other callers aren't affected
+    tft.setTextColor(color);
+}
+
+// ═════════════════════════════════════════════════════════════════
+//  PRIVATE – SHARED LAYOUT HELPERS
+// ═════════════════════════════════════════════════════════════════
+
+void TFTDriver::_drawStatusBar(bool homeScreen, uint8_t battPct) {
+    tft.fillRect(0, 0, SCREEN_W, STATUS_H, C_CARD_A);
+    tft.drawLine(0, STATUS_H, SCREEN_W, STATUS_H, C_ACCENT3);
+
+    if (homeScreen) {
+        // Chip-ECG icon ─────────────────────────────────────────
+        tft.drawRoundRect(4, 4, 10, 10, 1, C_ACCENT);
+        for (int p : {6, 9, 12}) {
+            tft.drawPixel(p, 3, C_ACCENT); tft.drawPixel(p,  2, C_ACCENT);
+            tft.drawPixel(p, 14,C_ACCENT); tft.drawPixel(p, 15, C_ACCENT);
+        }
+        tft.drawPixel(3,  7, C_ACCENT); tft.drawPixel(2,  7, C_ACCENT);
+        tft.drawPixel(3, 11, C_ACCENT); tft.drawPixel(2, 11, C_ACCENT);
+        tft.drawPixel(14, 7, C_ACCENT); tft.drawPixel(15, 7, C_ACCENT);
+        tft.drawPixel(14,11, C_ACCENT); tft.drawPixel(15,11, C_ACCENT);
+        // ECG line through chip
+        const int8_t ex[] = {1,4,5, 6, 7, 8,10,11,12,13,17};
+        const int8_t ey[] = {9,9,11,5,13, 9, 9, 7,11, 9, 9};
+        for (int i = 0; i < 10; i++)
+            tft.drawLine(ex[i], ey[i], ex[i+1], ey[i+1], C_ROSE);
+    } else {
+        tft.setTextColor(C_ACCENT);
+        tft.setTextSize(1);
+        tft.setCursor(5, 5);
+        tft.print("< Home");
+    }
+
+    // Battery icon ────────────────────────────────────────────────
+    int bx = SCREEN_W - 32, by = 4;
+    tft.drawRoundRect(bx, by, 22, 10, 2, C_ACCENT2);
+    tft.fillRect(bx + 22, by + 3, 3, 4, C_ACCENT2);
+    int fw = max(1, (int)(20 * battPct / 100.0f));
+    uint16_t fc = battPct > 50 ? C_GREEN :
+                  battPct > 20 ? C_AMBER : C_ROSE;
+    tft.fillRect(bx + 1, by + 1, fw, 8, fc);
+}
+
+void TFTDriver::_drawBlossom(int cx, int cy, int r,
+                              uint16_t petal, uint16_t center) {
+    const float angles[5] = { -90.f, -18.f, 54.f, 126.f, 198.f };
+    for (int i = 0; i < 5; i++) {
+        float rad = angles[i] * M_PI / 180.f;
+        tft.fillCircle(cx + (int)(r * 0.6f * cosf(rad)),
+                       cy + (int)(r * 0.6f * sinf(rad)),
+                       r / 2, petal);
+    }
+    tft.fillCircle(cx, cy, r / 3, center);
+}
+
+void TFTDriver::_drawSakuraBranch(bool faded) {
+    uint16_t branchCol = faded ? C_ACCENT3 : C_ACCENT2;
+    uint16_t petal1    = 0xFDB6;
+    uint16_t petal2    = 0xFCB3;
+
+    // Main sinuous vertical branch
+    for (int i = 0; i < 150; i++) {
+        int bx = 295 + (int)(8 * sinf(i / 150.f * 2.8f));
+        int by = 5 + i;
+        if (bx < SCREEN_W && by < SCREEN_H)
+            tft.drawPixel(bx, by, branchCol);
+    }
+    // Side branches
+    for (int i = 0; i < 28; i++) {
+        int bx = 289 - i, by = 48 + i / 2;
+        if (bx >= 0) tft.drawPixel(bx, by, branchCol);
+    }
+    for (int i = 0; i < 26; i++) {
+        int bx = 288 - i, by = 90 + i / 2;
+        if (bx >= 0) tft.drawPixel(bx, by, branchCol);
+    }
+
+    if (!faded) {
+        _drawBlossom(272, 64,  9, petal1, C_ACCENT2);
+        _drawBlossom(265, 100, 8, petal2, C_ACCENT2);
+        _drawBlossom(276, 128, 7, petal1, C_ACCENT2);
+        tft.fillCircle(252, 76,  3, petal2);
+        tft.fillCircle(248, 112, 3, petal1);
+        tft.fillCircle(260, 148, 3, petal2);
+    } else {
+        _drawBlossom(272, 64,  8, C_ACCENT3, C_ACCENT3);
+        _drawBlossom(265, 100, 7, C_ACCENT3, C_ACCENT3);
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════
+//  PRIVATE – SHAPE PRIMITIVES
+// ═════════════════════════════════════════════════════════════════
+
+void TFTDriver::_drawCard(int x, int y, int w, int h,
+                           int r, uint16_t fill, uint16_t border) {
+    tft.fillRoundRect(x, y, w, h, r, fill);
+    tft.drawRoundRect(x, y, w, h, r, border);
+}
+
+void TFTDriver::_drawHeart(int cx, int cy, int sz, uint16_t color) {
+    // Two circles + triangle for a pixel-art heart
+    tft.fillCircle(cx - sz / 2, cy - sz / 4, sz / 2, color);
+    tft.fillCircle(cx + sz / 2, cy - sz / 4, sz / 2, color);
+    tft.fillTriangle(cx - sz, cy - sz / 4,
+                     cx + sz, cy - sz / 4,
+                     cx,      cy + sz,     color);
+}
+
+void TFTDriver::_drawHBar(int x, int y, int w, int h,
+                           float frac, uint16_t color) {
+    tft.fillRect(x, y, w, h, C_ACCENT3);
+    int fw = (int)(w * constrain(frac, 0.f, 1.f));
+    if (fw > 0) tft.fillRect(x, y, fw, h, color);
+    tft.drawRect(x, y, w, h, C_ACCENT2);
+}
+
+// ═════════════════════════════════════════════════════════════════
+//  PRIVATE – GAUGE ARC
+// ═════════════════════════════════════════════════════════════════
+
+void TFTDriver::_drawGaugeArc(int cx, int cy, int r, int strokeW,
+                               int startDeg, int endDeg,
+                               uint16_t trackCol, uint16_t fillCol,
+                               float frac) {
+    frac = constrain(frac, 0.f, 1.f);
+    int fillEnd = startDeg + (int)((endDeg - startDeg) * frac);
+
+    for (int s = 0; s < strokeW; s++) {
+        int rr = r - s;
+        for (int d = startDeg; d <= endDeg; d += 2) {
+            float rad = d * M_PI / 180.f;
+            int px = cx + (int)(rr * cosf(rad));
+            int py = cy + (int)(rr * sinf(rad));
+            if (px >= 0 && px < SCREEN_W && py >= 0 && py < SCREEN_H)
+                tft.drawPixel(px, py, d <= fillEnd ? fillCol : trackCol);
+        }
+    }
+    // Needle-tip dot at fill end
+    float tipRad = fillEnd * M_PI / 180.f;
+    tft.fillCircle(cx + (int)(r * cosf(tipRad)),
+                   cy + (int)(r * sinf(tipRad)),
+                   strokeW / 2 + 1, fillCol);
+}
+
+// ═════════════════════════════════════════════════════════════════
+//  PRIVATE – COMPASS
+// ═════════════════════════════════════════════════════════════════
+
+void TFTDriver::_drawCompass(int cx, int cy, int r, float bearing) {
+    // Background & ring
+    tft.fillCircle(cx, cy, r, 0xFFF9);
+    tft.drawCircle(cx, cy, r,     C_ACCENT2);
+    tft.drawCircle(cx, cy, r + 1, C_ACCENT3);
+
+    // Tick marks
+    for (int d = 0; d < 360; d += 20)
+        tft.drawPixel(cx + (int)((r - 3) * cosf(d * M_PI / 180.f)),
+                      cy + (int)((r - 3) * sinf(d * M_PI / 180.f)),
+                      C_ACCENT3);
+
+    // Erase old needle if heading changed
+    if (_prevHeading >= 0 && _prevHeading != (int)bearing) {
+        float oldRad = _prevHeading * M_PI / 180.f;
+        int onx = cx + (int)(22 * sinf(oldRad));
+        int ony = cy - (int)(22 * cosf(oldRad));
+        int osx = cx - (int)(22 * sinf(oldRad));
+        int osy = cy + (int)(22 * cosf(oldRad));
+        tft.drawLine(cx, cy, onx, ony, 0xFFF9);
+        tft.drawLine(cx, cy, osx, osy, 0xFFF9);
+    }
+
+    // Draw new needle
+    float rad = bearing * M_PI / 180.f;
+    int nx = cx + (int)(22 * sinf(rad)),  ny = cy - (int)(22 * cosf(rad));
+    int sx = cx - (int)(22 * sinf(rad)),  sy = cy + (int)(22 * cosf(rad));
+    tft.drawLine(cx, cy, nx, ny, C_ROSE);
+    tft.drawLine(cx, cy, sx, sy, C_SUBTEXT);
+    tft.fillCircle(cx, cy, 3, C_WHITE);
+
+    tft.setTextColor(C_ROSE);
+    tft.setTextSize(1);
+    tft.setCursor(nx - 2, ny - 8);
+    tft.print("N");
+
+    _prevHeading = (int)bearing;
+}
+
+// ═════════════════════════════════════════════════════════════════
+//  PRIVATE – THRESHOLD COLOUR SELECTORS
+// ═════════════════════════════════════════════════════════════════
+
+uint16_t TFTDriver::_hrColor(uint8_t hr) {
+    if (hr < 50 || hr > 110) return UI_VAL_ALERT;
+    if (hr < 60 || hr > 100) return UI_VAL_WARN;
+    return UI_VAL_GOOD;
+}
+
+uint16_t TFTDriver::_spo2Color(uint8_t s) {
+    if (s < 90) return UI_VAL_ALERT;
+    if (s < 95) return UI_VAL_WARN;
+    return UI_VAL_INFO;
+}
+
+uint16_t TFTDriver::_tempColor(float t) {
+    if (t < 10.f || t > 35.f) return UI_VAL_ALERT;
+    if (t < 18.f || t > 30.f) return UI_VAL_WARN;
+    return UI_VAL_GOOD;
+}
+
+uint16_t TFTDriver::_humidColor(float h) {
+    if (h < 20.f || h > 85.f) return UI_VAL_ALERT;
+    if (h < 30.f || h > 70.f) return UI_VAL_WARN;
+    return UI_VAL_INFO;
+}
+
+uint16_t TFTDriver::_co2Color(uint16_t c) {
+    if (c > 1500) return UI_VAL_ALERT;
+    if (c >  800) return UI_VAL_WARN;
+    return UI_VAL_GOOD;
+}
+
+uint16_t TFTDriver::_tvocColor(uint16_t t) {
+    if (t > 300) return UI_VAL_ALERT;
+    if (t > 100) return UI_VAL_WARN;
+    return UI_VAL_GOOD;
+}
+
+uint16_t TFTDriver::_aqiColor(uint8_t aqi) {
+    if (aqi >= 4) return UI_VAL_ALERT;
+    if (aqi == 3) return UI_VAL_WARN;
+    return UI_VAL_GOOD;
 }
